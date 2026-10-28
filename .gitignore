@@ -4,6 +4,7 @@
 !/pc_app/
 !/firmware/
 !/.github/
+!/Digital_Audio_Analyzer_User_Guide.pdf
 
 # PC app build outputs and local state
 pc_app/build/

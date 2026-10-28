@@ -4,6 +4,8 @@ A 6-channel USB audio analyzer for measuring the speaker outputs of a car infota
 
 The hardware (RP2040 + 2 × PCM1865 ADCs) shows up on a laptop as a standard **USB Audio 2.0 microphone** (6 channels, 24-bit, 48 kHz). No driver is needed. The Windows app measures each channel live.
 
+**User guide:** [Digital_Audio_Analyzer_User_Guide.pdf](../Digital_Audio_Analyzer_User_Guide.pdf) covers setup, wiring, measuring, calibration and troubleshooting.
+
 This repository contains:
 
 | Folder | What |
