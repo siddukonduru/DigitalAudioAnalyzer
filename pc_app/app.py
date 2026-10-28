@@ -23,7 +23,7 @@ SETTINGS_FILE = os.path.join(APP_DIR, "analyzer_settings.json")
 CONNECT_LOG = os.path.join(APP_DIR, "analyzer_connect_log.txt")
 DEFAULT_FS_VRMS = 66.0      # Vrms at the HU terminals for a digital full-scale sine (rev A divider 47k/4.7k + ADC 10k, PGA 0 dB)
 CH_NAMES = [f"CH{i+1}" for i in range(N_CH)]
-SILENT_FS = 10 ** (-90 / 20)     # RMS (fraction of full scale) below which a channel counts as silent
+DEFAULT_SILENT_MV = 1.2          # channel counts as "silent" below this level (mV rms at the HU terminals)
 
 
 HOSTAPI_ORDER = ["Windows WASAPI", "MME", "Windows DirectSound", "Windows WDM-KS"]   # WDM-KS last: it fails with
@@ -62,6 +62,12 @@ class Capture(threading.Thread):
         self.open_errors = []
         self.dtype = 'float32'
 
+    def _cb_raw24(self, indata, frames, t, status):
+        b = np.frombuffer(indata, dtype=np.uint8).reshape(frames, self.ch, 3)
+        v = b[:, :, 0].astype(np.int32) | (b[:, :, 1].astype(np.int32) << 8) | (b[:, :, 2].astype(np.int32) << 16)
+        v = np.where(v >= (1 << 23), v - (1 << 24), v)
+        self._cb((v.astype(np.float32) / 8388608.0), frames, t, status)
+
     def _cb(self, indata, frames, t, status):
         if status:
             self.error = str(status)
@@ -81,11 +87,18 @@ class Capture(threading.Thread):
             self.record_q.put(indata.copy())
 
     def open(self, hostapi=""):
-        # Exclusive mode first: it bypasses the Windows audio engine, so the Windows input-volume slider, OEM
-        # enhancements (Dolby, Waves, Lenovo/Realtek APOs) and AGC cannot change the samples. Shared mode is a fallback.
+        # Shared mode with the RAW stream option: Windows skips its enhancement/effects processing (APOs, Dolby,
+        # Waves, AGC...) for this stream. Firmware v2.7+ reports a hardware volume control, so the Windows input
+        # volume slider does not scale the data either. (Exclusive mode was dropped: Windows refuses it for this
+        # board's channel layout and it would lock other apps out of the device.)
         attempts = []
         if 'WASAPI' in hostapi:
-            attempts.append(("exclusive", dict(extra_settings=sd.WasapiSettings(exclusive=True))))
+            try:
+                ws = sd.WasapiSettings()
+                ws._streaminfo.streamOption = 1      # eStreamOptionRaw (Windows 8.1+)
+                attempts.append(("shared raw", dict(extra_settings=ws)))
+            except Exception:
+                pass
         attempts.append(("shared", {}))
         if 'WASAPI' in hostapi:
             try:
@@ -94,11 +107,15 @@ class Capture(threading.Thread):
                 pass
         errs = []
         for name, extra in attempts:
-            for dtype in (('int32', 'float32') if name == 'exclusive' else ('float32', 'int32')):
+            for dtype in ('float32', 'int32'):
                 try:
                     self.dtype = dtype
-                    self.stream = sd.InputStream(device=self.dev, channels=self.ch, samplerate=FS, dtype=dtype,
-                                                 blocksize=0, latency='high', callback=self._cb, **extra)
+                    if dtype == 'int24':   # the board's native format (24-bit packed): needed for WASAPI exclusive
+                        self.stream = sd.RawInputStream(device=self.dev, channels=self.ch, samplerate=FS, dtype='int24',
+                                                        blocksize=0, latency='high', callback=self._cb_raw24, **extra)
+                    else:
+                        self.stream = sd.InputStream(device=self.dev, channels=self.ch, samplerate=FS, dtype=dtype,
+                                                     blocksize=0, latency='high', callback=self._cb, **extra)
                     self.stream.start()
                     self.mode = name
                     self.open_errors = errs
@@ -167,7 +184,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ---------------- settings
     def load_settings(self):
-        s = {"fs_vrms": DEFAULT_FS_VRMS, "cal": [1.0] * N_CH, "unit": "Vrms", "names": CH_NAMES[:]}
+        s = {"fs_vrms": DEFAULT_FS_VRMS, "cal": [1.0] * N_CH, "unit": "Vrms", "names": CH_NAMES[:], "silent_mv": DEFAULT_SILENT_MV}
         try:
             with open(SETTINGS_FILE) as f:
                 s.update(json.load(f))
@@ -195,6 +212,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.spin_fs = QtWidgets.QDoubleSpinBox(); self.spin_fs.setRange(0.1, 500); self.spin_fs.setDecimals(2)
         self.spin_fs.setValue(self.settings["fs_vrms"]); self.spin_fs.setSuffix(" Vrms"); self.spin_fs.valueChanged.connect(self.on_fs)
         top.addWidget(self.spin_fs)
+        top.addWidget(QtWidgets.QLabel("Silent <"))
+        self.spin_sil = QtWidgets.QDoubleSpinBox(); self.spin_sil.setRange(0.1, 1000); self.spin_sil.setDecimals(2)
+        self.spin_sil.setSingleStep(0.1); self.spin_sil.setSuffix(" mV"); self.spin_sil.setValue(float(self.settings.get("silent_mv", DEFAULT_SILENT_MV)))
+        self.spin_sil.setToolTip("Channels below this level show 'silent' and no Freq/THD/SNR. Noise floor is ~0.4-0.6 mV; "
+                                 "CH1->CH2 crosstalk can reach ~1 mV with a 9 V signal on CH1.")
+        self.spin_sil.valueChanged.connect(lambda v: (self.settings.__setitem__("silent_mv", v), self.save_settings()))
+        top.addWidget(self.spin_sil)
         self.cmb_unit = QtWidgets.QComboBox(); self.cmb_unit.addItems(["Vrms", "dBV", "dBu", "dBFS"]); self.cmb_unit.setCurrentText(self.settings["unit"])
         self.cmb_unit.currentTextChanged.connect(self.on_unit); top.addWidget(self.cmb_unit)
         self.btn_log = QtWidgets.QPushButton("Start CSV log"); self.btn_log.setCheckable(True); self.btn_log.toggled.connect(self.toggle_log); top.addWidget(self.btn_log)
@@ -326,12 +350,10 @@ class MainWindow(QtWidgets.QMainWindow):
                     c.open(ha)
                     cap = c
                     text = f"Device: {d['name']}  [{ha}, {c.mode}, {ch} ch, {FS} Hz]"
-                    if c.mode != "exclusive":
-                        why = "; ".join(e for e in c.open_errors if e.startswith("exclusive")) or "not tried on this API"
-                        step(f"exclusive mode refused: {why}")
-                        text += ("  -  NOTE: shared mode (exclusive refused: " + why[:160] + "). With firmware v2.7+ the "
-                                 "Windows input volume no longer scales the data; keep audio enhancements off. For exclusive: "
-                                 "close apps using this microphone (Teams, browser, Lenovo/Dolby voice tools) and Reconnect.")
+                    if c.mode != "shared raw":
+                        step(f"raw mode not available ({c.mode}); open errors: {'; '.join(c.open_errors)}")
+                        text += ("  -  NOTE: Windows raw mode not available - keep Audio enhancements OFF for this device "
+                                 "(Sound settings > the device > Audio enhancements, and Dolby/OEM audio tools).")
                     if ch < N_CH:
                         text += ("  - only %d ch exposed: set the device to 6 channels 24-bit 48000 Hz in Windows Sound "
                                  "settings > Recording > Properties > Advanced" % ch)
@@ -516,8 +538,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.table.item(i, 1).setText(self.fmt_level(vrms))
             self.table.item(i, 2).setText(gain_s)
             self.table.item(i, 3).setText(f"{vpk:8.3f} V")
-            # silent = below -90 dBFS (~2 mV at the HU at 66 Vrms full scale): only noise / crosstalk from other channels
-            silent = r['rms'] < SILENT_FS
+            # silent = below the 'Silent <' level (default 1.2 mV at the HU): only noise / crosstalk from other channels
+            silent = vrms < float(self.settings.get("silent_mv", DEFAULT_SILENT_MV)) / 1000.0
             valid = (r['freq'] > 0) and not silent
             self.table.item(i, 4).setText(f"{r['freq']:9.2f}" if valid else "-")
             self.table.item(i, 5).setText(f"{r['thd']*100:7.4f}" if valid else "-")
