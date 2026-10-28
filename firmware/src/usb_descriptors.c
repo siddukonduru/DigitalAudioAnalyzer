@@ -16,7 +16,7 @@ tusb_desc_device_t const desc_device = {
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
     .idVendor           = USB_VID,
     .idProduct          = USB_PID,
-    .bcdDevice          = 0x0100,
+    .bcdDevice          = 0x0207,   /* v2.7: changed descriptors (feature unit) */
     .iManufacturer      = 0x01,
     .iProduct           = 0x02,
     .iSerialNumber      = 0x03,
@@ -45,6 +45,14 @@ enum {
 #define UAC2_ENTITY_CLOCK          0x04
 #define UAC2_ENTITY_INPUT_TERMINAL 0x01
 #define UAC2_ENTITY_OUTPUT_TERMINAL 0x03
+#define UAC2_ENTITY_FEATURE_UNIT   0x02   /* v2.7: master mute + volume so Windows uses "hardware" volume (ignored by the
+                                             board) instead of software gain on the samples */
+
+#define FU6_LEN (6 + (6 + 1) * 4)
+#define FU_MASTER_CTRLS ((AUDIO_CTRL_RW << AUDIO_FEATURE_UNIT_CTRL_MUTE_POS) | (AUDIO_CTRL_RW << AUDIO_FEATURE_UNIT_CTRL_VOLUME_POS))
+#define TUD_AUDIO_DESC_FEATURE_UNIT_SIX_CHANNEL(_unitid, _srcid, _m) \
+    FU6_LEN, TUSB_DESC_CS_INTERFACE, AUDIO_CS_AC_INTERFACE_FEATURE_UNIT, _unitid, _srcid, U32_TO_U8S_LE(_m), \
+    U32_TO_U8S_LE(0), U32_TO_U8S_LE(0), U32_TO_U8S_LE(0), U32_TO_U8S_LE(0), U32_TO_U8S_LE(0), U32_TO_U8S_LE(0), 0x00
 
 uint8_t const desc_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
@@ -55,7 +63,7 @@ uint8_t const desc_configuration[] = {
     TUD_AUDIO_DESC_STD_AC(ITF_NUM_AUDIO_CONTROL, 0x00, 0x02),
     /* Class-specific AC header */
     TUD_AUDIO_DESC_CS_AC(0x0200, AUDIO_FUNC_MICROPHONE,
-                         TUD_AUDIO_DESC_CLK_SRC_LEN + TUD_AUDIO_DESC_INPUT_TERM_LEN + TUD_AUDIO_DESC_OUTPUT_TERM_LEN,
+                         TUD_AUDIO_DESC_CLK_SRC_LEN + TUD_AUDIO_DESC_INPUT_TERM_LEN + FU6_LEN + TUD_AUDIO_DESC_OUTPUT_TERM_LEN,
                          AUDIO_CS_AS_INTERFACE_CTRL_LATENCY_POS),
     /* Clock source: internal fixed, frequency read-only */
     TUD_AUDIO_DESC_CLK_SRC(UAC2_ENTITY_CLOCK, AUDIO_CLOCK_SOURCE_ATT_INT_FIX_CLK,
@@ -64,9 +72,11 @@ uint8_t const desc_configuration[] = {
     TUD_AUDIO_DESC_INPUT_TERM(UAC2_ENTITY_INPUT_TERMINAL, AUDIO_TERM_TYPE_IN_GENERIC_MIC, UAC2_ENTITY_OUTPUT_TERMINAL,
                               UAC2_ENTITY_CLOCK, AUDIO_N_CHANNELS, AUDIO_CHANNEL_CONFIG_NON_PREDEFINED, 0x00,
                               AUDIO_CTRL_R << AUDIO_IN_TERM_CTRL_CONNECTOR_POS, 0x00),
-    /* Output terminal: USB streaming, sourced directly from the input terminal */
+    /* Feature unit: master mute + volume (accepted and ignored, data is never scaled) */
+    TUD_AUDIO_DESC_FEATURE_UNIT_SIX_CHANNEL(UAC2_ENTITY_FEATURE_UNIT, UAC2_ENTITY_INPUT_TERMINAL, FU_MASTER_CTRLS),
+    /* Output terminal: USB streaming, sourced from the feature unit */
     TUD_AUDIO_DESC_OUTPUT_TERM(UAC2_ENTITY_OUTPUT_TERMINAL, AUDIO_TERM_TYPE_USB_STREAMING, UAC2_ENTITY_INPUT_TERMINAL,
-                               UAC2_ENTITY_INPUT_TERMINAL, UAC2_ENTITY_CLOCK, 0x0000, 0x00),
+                               UAC2_ENTITY_FEATURE_UNIT, UAC2_ENTITY_CLOCK, 0x0000, 0x00),
     /* AS interface alt 0 (zero bandwidth) */
     TUD_AUDIO_DESC_STD_AS_INT(ITF_NUM_AUDIO_STREAMING, 0x00, 0x00, 0x00),
     /* AS interface alt 1 (streaming) */

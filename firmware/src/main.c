@@ -34,7 +34,7 @@
 #include "pcm1865.h"
 #include "tdm_rx.pio.h"
 
-#define FW_VERSION "2.6"
+#define FW_VERSION "2.7"
 
 #define PIN_SDA     18
 #define PIN_SCL     19
@@ -69,6 +69,8 @@ static volatile int8_t itf_event = -1;      /* last alt setting selected by the 
 static bool adc_ok = false;
 static uint32_t sampFreq = AUDIO_SAMPLE_RATE;
 static uint8_t clkValid = 1;
+static uint8_t fu_mute = 0;                 /* v2.7 feature unit state: reported to Windows, never applied to the data */
+static int16_t fu_volume = 0;               /* 1/256 dB */
 static audio_control_range_4_n_t(1) sampleFreqRng;
 
 static uint8_t usb_pkt[FRAMES_PER_PKT * AUDIO_N_CHANNELS * AUDIO_BYTES_PER_SAMPLE];
@@ -561,10 +563,15 @@ bool tud_audio_set_req_itf_cb(uint8_t rhport, tusb_control_request_t const *p_re
     (void) rhport; (void) p_request; (void) pBuff; return false;
 }
 bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p_request, uint8_t *pBuff) {
-    (void) rhport; (void) pBuff;
+    (void) rhport;
     uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
     uint8_t entityID = TU_U16_HIGH(p_request->wIndex);
     if (entityID == 4 && ctrlSel == AUDIO_CS_CTRL_SAM_FREQ) return true;   /* fixed 48 kHz, accept silently */
+    if (entityID == 2) {                                                    /* feature unit: store, never apply */
+        if (ctrlSel == AUDIO_FU_CTRL_MUTE) { fu_mute = pBuff[0]; return true; }
+        if (ctrlSel == AUDIO_FU_CTRL_VOLUME) { fu_volume = (int16_t) (pBuff[0] | (pBuff[1] << 8)); return true; }
+        return false;
+    }
     return false;
 }
 bool tud_audio_get_req_ep_cb(uint8_t rhport, tusb_control_request_t const *p_request) {
@@ -585,6 +592,19 @@ bool tud_audio_get_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
             ret.bmChannelConfig = (audio_channel_config_t) 0;
             ret.iChannelNames = 0;
             return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, (void *) &ret, sizeof(ret));
+        }
+        return false;
+    }
+    if (entityID == 2) {   /* feature unit (master channel only) */
+        if (ctrlSel == AUDIO_FU_CTRL_MUTE && p_request->bRequest == AUDIO_CS_REQ_CUR)
+            return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &fu_mute, 1);
+        if (ctrlSel == AUDIO_FU_CTRL_VOLUME) {
+            if (p_request->bRequest == AUDIO_CS_REQ_CUR)
+                return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &fu_volume, 2);
+            if (p_request->bRequest == AUDIO_CS_REQ_RANGE) {
+                static const uint8_t vol_range[8] = {1, 0,  0x00, 0xA6,  0x00, 0x00,  0x00, 0x01};   /* 1 range: -90..0 dB, 1 dB */
+                return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, (void *) vol_range, sizeof(vol_range));
+            }
         }
         return false;
     }

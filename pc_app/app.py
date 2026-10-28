@@ -59,6 +59,7 @@ class Capture(threading.Thread):
         self.error = None
         self.record_q = None
         self.mode = ""
+        self.open_errors = []
         self.dtype = 'float32'
 
     def _cb(self, indata, frames, t, status):
@@ -100,6 +101,7 @@ class Capture(threading.Thread):
                                                  blocksize=0, latency='high', callback=self._cb, **extra)
                     self.stream.start()
                     self.mode = name
+                    self.open_errors = errs
                     return
                 except Exception as e:
                     errs.append(f"{name}/{dtype}: {e}")
@@ -325,9 +327,11 @@ class MainWindow(QtWidgets.QMainWindow):
                     cap = c
                     text = f"Device: {d['name']}  [{ha}, {c.mode}, {ch} ch, {FS} Hz]"
                     if c.mode != "exclusive":
-                        text += ("  -  WARNING: not exclusive, the Windows input volume and audio enhancements change the "
-                                 "readings. Sound settings > Recording > this device > Properties > Advanced: tick "
-                                 "'Allow applications to take exclusive control', close other apps using it, Reconnect.")
+                        why = "; ".join(e for e in c.open_errors if e.startswith("exclusive")) or "not tried on this API"
+                        step(f"exclusive mode refused: {why}")
+                        text += ("  -  NOTE: shared mode (exclusive refused: " + why[:160] + "). With firmware v2.7+ the "
+                                 "Windows input volume no longer scales the data; keep audio enhancements off. For exclusive: "
+                                 "close apps using this microphone (Teams, browser, Lenovo/Dolby voice tools) and Reconnect.")
                     if ch < N_CH:
                         text += ("  - only %d ch exposed: set the device to 6 channels 24-bit 48000 Hz in Windows Sound "
                                  "settings > Recording > Properties > Advanced" % ch)

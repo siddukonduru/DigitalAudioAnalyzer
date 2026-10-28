@@ -8,7 +8,7 @@ This repository contains:
 
 | Folder | What |
 |---|---|
-| [`firmware/`](../firmware) | RP2040 firmware (C, pico-sdk 2.1.1 + TinyUSB) and a ready-to-flash `AudioAnalyzer_PC_fw.uf2` (v2.6) |
+| [`firmware/`](../firmware) | RP2040 firmware (C, pico-sdk 2.1.1 + TinyUSB) and a ready-to-flash `AudioAnalyzer_PC_fw.uf2` (v2.7) |
 | [`pc_app/`](../pc_app) | Windows analyzer app (Python, PySide6 + pyqtgraph) |
 
 ## PC app
