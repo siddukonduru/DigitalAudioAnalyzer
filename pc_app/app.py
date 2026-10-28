@@ -80,16 +80,20 @@ class Capture(threading.Thread):
             self.record_q.put(indata.copy())
 
     def open(self, hostapi=""):
-        attempts = [("shared", {})]
+        # Exclusive mode first: it bypasses the Windows audio engine, so the Windows input-volume slider, OEM
+        # enhancements (Dolby, Waves, Lenovo/Realtek APOs) and AGC cannot change the samples. Shared mode is a fallback.
+        attempts = []
+        if 'WASAPI' in hostapi:
+            attempts.append(("exclusive", dict(extra_settings=sd.WasapiSettings(exclusive=True))))
+        attempts.append(("shared", {}))
         if 'WASAPI' in hostapi:
             try:
                 attempts.append(("shared+convert", dict(extra_settings=sd.WasapiSettings(auto_convert=True))))
             except TypeError:
                 pass
-            attempts.append(("exclusive", dict(extra_settings=sd.WasapiSettings(exclusive=True))))
         errs = []
         for name, extra in attempts:
-            for dtype in ('float32', 'int32'):
+            for dtype in (('int32', 'float32') if name == 'exclusive' else ('float32', 'int32')):
                 try:
                     self.dtype = dtype
                     self.stream = sd.InputStream(device=self.dev, channels=self.ch, samplerate=FS, dtype=dtype,
@@ -320,6 +324,10 @@ class MainWindow(QtWidgets.QMainWindow):
                     c.open(ha)
                     cap = c
                     text = f"Device: {d['name']}  [{ha}, {c.mode}, {ch} ch, {FS} Hz]"
+                    if c.mode != "exclusive":
+                        text += ("  -  WARNING: not exclusive, the Windows input volume and audio enhancements change the "
+                                 "readings. Sound settings > Recording > this device > Properties > Advanced: tick "
+                                 "'Allow applications to take exclusive control', close other apps using it, Reconnect.")
                     if ch < N_CH:
                         text += ("  - only %d ch exposed: set the device to 6 channels 24-bit 48000 Hz in Windows Sound "
                                  "settings > Recording > Properties > Advanced" % ch)
