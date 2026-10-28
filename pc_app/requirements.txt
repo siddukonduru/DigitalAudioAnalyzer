@@ -1,0 +1,6 @@
+numpy>=1.26
+sounddevice>=0.4.6
+pyqtgraph>=0.13.3
+PySide6>=6.6
+pyinstaller>=6.0
+pyserial>=3.5

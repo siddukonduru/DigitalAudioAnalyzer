@@ -1,0 +1,24 @@
+# Only the PC app and firmware are published
+/*
+!/.gitignore
+!/pc_app/
+!/firmware/
+!/.github/
+
+# PC app build outputs and local state
+pc_app/build/
+pc_app/dist/
+__pycache__/
+*.pyc
+.venv/
+venv/
+*_log.txt
+pc_app/analyzer_settings.json
+
+# Firmware build dir
+firmware/build/
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store

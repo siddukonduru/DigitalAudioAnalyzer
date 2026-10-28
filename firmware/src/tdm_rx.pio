@@ -1,0 +1,42 @@
+; TDM receiver for PCM1865 (DSP/TDM format, TX_TDM_OFFSET = 1, 32-bit slots, BCK = 256 fs)
+;
+; Absolute GPIOs (board AudioAnalyzer_PC rev A):
+;   GPIO20 = BCK (from PCM1865 #1, master)
+;   GPIO22 = LRCK (1-BCK-wide pulse once per frame)
+;   data pin = IN pin base of the state machine (GPIO24 = ADC1 DOUT, GPIO25 = ADC2 DOUT)
+;
+; PCM1865 drives DOUT on the BCK falling edge; we sample on the rising edge.
+; With TX_TDM_OFFSET = 1 the MSB of slot 1 is launched on the falling edge that follows the
+; BCK rising edge at which LRCK is seen high, i.e. it is valid on the next rising edge.
+; 4 slots x 32 bits are captured per frame (autopush every 32 bits, MSB first).
+
+.program tdm_rx
+.wrap_target
+    wait 0 gpio 22          ; LRCK low
+    wait 1 gpio 22          ; LRCK rising edge (launched on a BCK falling edge)
+    wait 0 gpio 20          ; be sure we are after that falling edge
+    wait 1 gpio 20          ; BCK rising edge: LRCK is sampled high here by a slave
+    set y, 3                ; 4 slots
+slot:
+    set x, 31               ; 32 bits
+bit:
+    wait 0 gpio 20
+    wait 1 gpio 20          ; data valid on rising edge
+    in pins, 1
+    jmp x-- bit
+    jmp y-- slot
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+static inline void tdm_rx_program_init(PIO pio, uint sm, uint offset, uint data_pin) {
+    pio_sm_config c = tdm_rx_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, data_pin);
+    sm_config_set_in_shift(&c, false /*shift left: first bit -> MSB*/, true /*autopush*/, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+    sm_config_set_clkdiv(&c, 1.0f);
+    pio_gpio_init(pio, data_pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, data_pin, 1, false);
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}
