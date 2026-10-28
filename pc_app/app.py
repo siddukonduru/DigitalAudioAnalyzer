@@ -62,12 +62,6 @@ class Capture(threading.Thread):
         self.open_errors = []
         self.dtype = 'float32'
 
-    def _cb_raw24(self, indata, frames, t, status):
-        b = np.frombuffer(indata, dtype=np.uint8).reshape(frames, self.ch, 3)
-        v = b[:, :, 0].astype(np.int32) | (b[:, :, 1].astype(np.int32) << 8) | (b[:, :, 2].astype(np.int32) << 16)
-        v = np.where(v >= (1 << 23), v - (1 << 24), v)
-        self._cb((v.astype(np.float32) / 8388608.0), frames, t, status)
-
     def _cb(self, indata, frames, t, status):
         if status:
             self.error = str(status)
@@ -110,12 +104,8 @@ class Capture(threading.Thread):
             for dtype in ('float32', 'int32'):
                 try:
                     self.dtype = dtype
-                    if dtype == 'int24':   # the board's native format (24-bit packed): needed for WASAPI exclusive
-                        self.stream = sd.RawInputStream(device=self.dev, channels=self.ch, samplerate=FS, dtype='int24',
-                                                        blocksize=0, latency='high', callback=self._cb_raw24, **extra)
-                    else:
-                        self.stream = sd.InputStream(device=self.dev, channels=self.ch, samplerate=FS, dtype=dtype,
-                                                     blocksize=0, latency='high', callback=self._cb, **extra)
+                    self.stream = sd.InputStream(device=self.dev, channels=self.ch, samplerate=FS, dtype=dtype,
+                                                 blocksize=0, latency='high', callback=self._cb, **extra)
                     self.stream.start()
                     self.mode = name
                     self.open_errors = errs
